@@ -1,0 +1,115 @@
+﻿@page "/"
+@using System.Text.Json
+@using System.Text.Json.Stream
+@using BlazorJsonStreamingSample.Models
+@inject HttpClient httpClient;
+
+<PageTitle>JSON Streaming Sample</PageTitle>
+
+<h1>JSON Streaming Sample</h1>
+
+<div>
+    @if (!isBusy)
+    {
+        <button @onclick="OnClick">Load</button>
+ 
+        @if (ColorNames.Count > 0)
+        {
+            <hr/>
+            @foreach (string color in ColorNames.Order())
+            {
+                <p>@color</p>
+            }
+        }
+    }
+    else
+    {
+        @if (ColorNames.Count > 0)
+        {
+            <p>Loading...@($"{ColorNames.Count:N0}")</p>
+        }
+        else
+        {
+            <p> Connecting & buffering...</p>
+        }
+    }
+</div>
+
+@code
+{
+    // This sample is in response to this issue: https://github.com/dotnet/aspnetcore/issues/51597
+
+    bool isBusy;
+    readonly List<string> ColorNames = new();
+
+    readonly string url = "https://color-names.herokuapp.com/v1/";
+    readonly JsonSerializerOptions jsonSerializerOptions = new();
+
+    public async Task OnClick(MouseEventArgs args)
+    {
+        // set state and clear list
+        isBusy = true;
+        ColorNames.Clear();
+
+        // update UI before starting
+        StateHasChanged();
+
+        Stream jsonStream = await httpClient.GetStreamAsync(url);
+        using Utf8JsonAsyncStreamReader reader = new(jsonStream);
+
+        // move to the start of the array and read the stream
+        while (await reader.ReadAsync())
+            await ProcessJsonStreamAsync(reader);
+
+         
+        // refresh UI to show the final count
+        StateHasChanged();
+
+        // we're done, so clear the state
+        isBusy = false;
+        
+        // refresh UI to show the results
+        StateHasChanged();
+    }
+
+    async Task ProcessJsonStreamAsync(Utf8JsonAsyncStreamReader reader)
+    {
+        if (reader.TokenType != JsonTokenType.PropertyName)
+            return;
+
+        // process properties for data that we want
+        if (reader.GetString() == "colors")
+        {
+            // move to the start of the array
+            await reader.ReadAsync();
+
+            // step through each complete object in the Json Array
+            while (await reader.ReadAsync() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                // convert the json object to a class
+                await ProcessObjectAsync(reader);
+
+                // report progress every 25 objects...
+                if (ColorNames.Count % 25 != 0 || ColorNames.Count == 0)
+                    continue;
+
+                // update UI to show current count progress
+                await InvokeAsync(StateHasChanged);
+                
+                // yield to give the UI time to update - do not use Task.Yield()
+                await Task.Delay(1);
+            }
+        }
+    }
+
+    async Task ProcessObjectAsync(Utf8JsonAsyncStreamReader reader)
+    {
+        Color? color = await reader.DeserializeAsync<Color>(jsonSerializerOptions);
+
+        // process color...
+        if (color is null)
+            return;
+
+        ColorNames.Add($"{color.name}: {color.hex}");
+    }
+}
